@@ -171,6 +171,7 @@ const LS_KEY = "epicscout.v1";
 const DEF = {
   key: "",
   claudeKey: "",
+  claudeWs: "",
   settings: { depth: 15, cpvLong: [50, 100], cpvShort: [15, 30], region: "KR", rpmLong: [1500, 4000], rpmShort: [70, 150], model: "claude-haiku-5-5" },
   lists: { base: { name: "기본 후보", ids: [] } },
   activeList: "base",
@@ -849,8 +850,9 @@ function viewSetup(){
     </form>
     <form class="panel stack" id="claudeForm">
       <h2>Claude API 키 (시청자 추정·AI 요약용, 선택)</h2>
-      <p class="muted" style="margin:0">없어도 검색·분석·광고 영상 감지·댓글 언어 분포는 동작합니다. 키는 console.anthropic.com에서 발급하며, 채널 1개 추정에 드는 비용은 수십 원 수준입니다.</p>
+      <p class="muted" style="margin:0">없어도 검색·분석·광고 영상 감지·댓글 언어 분포는 동작합니다. 키는 platform.claude.com에서 발급하며, 채널 1개 추정에 드는 비용은 수십 원 수준입니다.</p>
       <div class="row"><input type="password" id="claudeKeyIn" class="grow" value="${esc(S.claudeKey)}" placeholder="sk-ant-…" style="width:auto"><button type="button" class="btn" data-act="showClaudeKey">보기</button></div>
+      <label class="f">워크스페이스 ID (키를 워크스페이스 없이 만든 경우만)<input type="text" id="claudeWsIn" value="${esc(S.claudeWs)}" placeholder="wrkspc_… (비워 두면 생략)"></label>
       <label class="f">모델<input type="text" id="s-model" value="${esc(st.model)}"></label>
       <div class="row"><button class="btn pri">저장</button><button type="button" class="btn" data-act="testClaude">연결 테스트</button></div>
     </form>
@@ -914,13 +916,15 @@ async function claude(prompt, maxTokens=1800){
   try{
     r = await fetch("https://api.anthropic.com/v1/messages", {method:"POST", headers:{
       "content-type":"application/json", "x-api-key":S.claudeKey, "anthropic-version":"2023-06-01",
-      "anthropic-dangerous-direct-browser-access":"true"},
+      "anthropic-dangerous-direct-browser-access":"true", ...(S.claudeWs?{"anthropic-workspace-id":S.claudeWs}:{})},
       body: JSON.stringify({model:S.settings.model, max_tokens:maxTokens, messages:[{role:"user", content:prompt}]})});
   }catch(e){ throw new ClaudeErr("Claude API에 연결하지 못했습니다."); }
   const j = await r.json().catch(()=>({}));
   if(!r.ok){
     if(r.status===401) throw new ClaudeErr("Claude API 키가 올바르지 않습니다. 설정에서 확인해 주세요.");
     if(r.status===429) throw new ClaudeErr("Claude API 요청이 많아 잠시 막혔습니다. 1분 뒤 다시 시도해 주세요.");
+    if(r.status===400 && /workspace/i.test(j?.error?.message||"")) throw new ClaudeErr("이 키는 워크스페이스 지정이 필요합니다. 키를 만들 때 워크스페이스를 고르거나, 설정에 워크스페이스 ID(wrkspc_로 시작)를 넣어 주세요.");
+    if(r.status===400 && /credit|balance|billing/i.test(j?.error?.message||"")) throw new ClaudeErr("Claude API 크레딧이 부족합니다. Claude Console의 결제 메뉴에서 충전해 주세요.");
     if(r.status===404) throw new ClaudeErr(`모델 이름(${S.settings.model})을 찾지 못했습니다. 설정에서 모델 이름을 확인해 주세요.`);
     throw new ClaudeErr("Claude API 오류: "+(j?.error?.message||r.status));
   }
@@ -1152,7 +1156,7 @@ document.addEventListener("click", async e => {
     case "topic": { const t=el.dataset.v, i=SV.f.topics.indexOf(t); i>=0?SV.f.topics.splice(i,1):SV.f.topics.push(t); render(); break; }
     case "resetF": SV.f = {subMin:"",subMax:"",medMin:"",rateMin:"",engMin:"",recent:"0",kr:false,topics:[],format:"all",ad:"all"}; render(); break;
     case "estimate": runEstimate(id); break;
-    case "testClaude": { const k=$("#claudeKeyIn").value.trim(), md=$("#s-model").value.trim(); const pk=S.claudeKey, pm=S.settings.model; S.claudeKey=k; S.settings.model=md||pm; try{ await claude('"ok"라고만 답해.', 10); toast("Claude API 연결에 성공했습니다. 저장을 눌러 주세요."); }catch(err){ toast(err.message,true); } S.claudeKey=pk; S.settings.model=pm; break; }
+    case "testClaude": { const k=$("#claudeKeyIn").value.trim(), md=$("#s-model").value.trim(); const pk=S.claudeKey, pm=S.settings.model, pw=S.claudeWs; S.claudeKey=k; S.claudeWs=$("#claudeWsIn").value.trim(); S.settings.model=md||pm; try{ await claude('"ok"라고만 답해.', 10); toast("Claude API 연결에 성공했습니다. 저장을 눌러 주세요."); }catch(err){ toast(err.message,true); } S.claudeKey=pk; S.claudeWs=pw; S.settings.model=pm; break; }
     case "showClaudeKey": { const i=$("#claudeKeyIn"); i.type = i.type==="password"?"text":"password"; el.textContent = i.type==="password"?"보기":"숨기기"; break; }
     case "saveAll": { const l=S.lists[S.activeList]; const rows=SV.ids.map(i=>S.ch[i]).filter(Boolean).filter(passes); let n=0; for(const c of rows) if(!l.ids.includes(c.id)){ l.ids.push(c.id); n++; } save(); toast(`'${l.name}'에 ${n}개 채널을 저장했습니다.`); render(); break; }
     case "exportSearch": exportChannels(sortRows(SV.ids.map(i=>S.ch[i]).filter(Boolean).filter(passes), SV.sort), `채널검색_${SV.q}`); break;
@@ -1178,7 +1182,7 @@ document.addEventListener("click", async e => {
     case "exportCamp": exportCampaign(); break;
     case "showKey": { const i=$("#keyIn"); i.type = i.type==="password"?"text":"password"; el.textContent = i.type==="password"?"보기":"숨기기"; break; }
     case "testKey": { const k=$("#keyIn").value.trim(); const prev=S.key; S.key=k; try{ await yt("channels",{part:"id",id:"UC_x5XG1OV2P6uZZ5FSM9Ttw"},1); toast("연결에 성공했습니다. 저장을 눌러 주세요."); }catch(err){ toast(err.message,true); } S.key=prev; break; }
-    case "exportJson": { const {key, claudeKey, ch, quota, ...rest} = S; download(`epicscout_backup_${new Date().toISOString().slice(0,10)}.json`, JSON.stringify(rest,null,1), "application/json"); break; }
+    case "exportJson": { const {key, claudeKey, claudeWs, ch, quota, ...rest} = S; download(`epicscout_backup_${new Date().toISOString().slice(0,10)}.json`, JSON.stringify(rest,null,1), "application/json"); break; }
     case "clearCache": SETUP.confirm="cache"; render(); break;
     case "clearCacheOk": S.ch={}; SETUP.confirm=null; save(); toast("분석 캐시를 비웠습니다."); render(); break;
   }
@@ -1197,7 +1201,7 @@ document.addEventListener("submit", async e => {
   if(f==="monForm"){ const v=$("#monIn").value; if(!v.trim()) return; try{ const id=await resolveChannel(v); if(!id) return toast("채널을 찾지 못했습니다.",true); await track(id); render(); toast("추가했습니다. '업데이트 확인'을 누르세요."); }catch(err){toast(err.message,true);} }
   if(f==="newCampForm"){ const v=$("#newCampIn").value.trim(); if(!v) return; const c={id:uid(), name:v, created:Date.now(), videos:[]}; S.campaigns.push(c); S.activeCamp=c.id; save(); render(); }
   if(f==="addVidForm"){ const t=$("#vidIn").value; await addCampVideos(t, camp().id); }
-  if(f==="claudeForm"){ S.claudeKey=$("#claudeKeyIn").value.trim(); S.settings.model=$("#s-model").value.trim()||DEF.settings.model; save(); toast(S.claudeKey?"Claude API 키를 저장했습니다.":"Claude API 키를 지웠습니다."); render(); }
+  if(f==="claudeForm"){ S.claudeKey=$("#claudeKeyIn").value.trim(); S.claudeWs=$("#claudeWsIn").value.trim(); S.settings.model=$("#s-model").value.trim()||DEF.settings.model; save(); toast(S.claudeKey?"Claude API 키를 저장했습니다.":"Claude API 키를 지웠습니다."); render(); }
   if(f==="keyForm"){ S.key=$("#keyIn").value.trim(); save(); toast(S.key?"API 키를 저장했습니다.":"API 키를 지웠습니다."); render(); }
   if(f==="setForm"){
     const n = id => Math.max(0, +$(id).value||0);
